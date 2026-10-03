@@ -40,8 +40,8 @@ import { ESPLoader, Transport } from "https://cdn.jsdelivr.net/npm/esptool-js@0.
 // ===== НАСТРОЙКИ =====
 const FOLDER = "firmware";          // папка в репозитории, внутри которой лежат папки версий
 const FILES = [                     // обязательные файлы в каждой папке версии
-  { name: "bootloader.bin", addr: 0x0 },
-  { name: "partitions.bin", addr: 0x8000 },
+  { name: "bootloader.bin", addr: 0x00000 },
+  { name: "partitions.bin", addr: 0x80000 },
   { name: "firmware.bin",   addr: 0x10000 },
 ];
 const BAUD = 460800;
