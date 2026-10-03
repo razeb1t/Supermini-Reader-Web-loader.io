@@ -3,35 +3,145 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ESP32 прошивальщик</title>
+<title>Supermini-Reader Loader</title>
 <style>
-  :root { --bg:#fff; --fg:#1a1a1a; --card:#f4f5f7; --acc:#2563eb; --mut:#6b7280; }
-  @media (prefers-color-scheme: dark) { :root { --bg:#111418; --fg:#e8e8e8; --card:#1b2027; --mut:#9aa3af; } }
-  body { margin:0; padding:24px 16px; background:var(--bg); color:var(--fg); font:16px system-ui,sans-serif; }
-  main { max-width:480px; margin:0 auto; }
-  h1 { font-size:1.4rem; margin:0 0 16px; }
-  .card { background:var(--card); border-radius:12px; padding:16px; }
-  label { display:block; font-size:.85rem; color:var(--mut); margin-bottom:6px; }
-  select, button { width:100%; font:inherit; padding:12px; border-radius:8px; border:1px solid #8884; box-sizing:border-box; }
-  select { background:var(--bg); color:var(--fg); }
-  button { background:var(--acc); color:#fff; border:0; margin-top:14px; cursor:pointer; font-weight:600; }
-  button:disabled { opacity:.5; cursor:default; }
-  progress { width:100%; margin-top:14px; height:10px; }
-  pre { background:#000; color:#9f9; padding:10px; border-radius:8px; height:160px; overflow:auto; font-size:.75rem; white-space:pre-wrap; margin:14px 0 0; }
-  #warn { color:#d33; margin-top:12px; display:none; }
+  :root {
+    --bg:#070b14; --card:rgba(255,255,255,.045); --line:rgba(255,255,255,.09);
+    --fg:#eaf0ff; --mut:#8b97b5; --a:#22d3ee; --b:#8b5cf6; --ok:#34d399; --err:#fb7185;
+  }
+  * { box-sizing:border-box; }
+  html,body { margin:0; min-height:100%; }
+  body {
+    color:var(--fg); font:16px/1.5 Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    background:
+      radial-gradient(900px 500px at 15% -10%, rgba(34,211,238,.18), transparent 60%),
+      radial-gradient(800px 500px at 90% 0%, rgba(139,92,246,.22), transparent 60%),
+      radial-gradient(700px 500px at 50% 110%, rgba(34,211,238,.10), transparent 60%),
+      var(--bg);
+    background-attachment:fixed;
+    padding:32px 16px 48px;
+  }
+  main { max-width:520px; margin:0 auto; }
+
+  header { text-align:center; margin-bottom:28px; }
+  .logo {
+    width:68px; height:68px; margin:0 auto 16px; border-radius:20px; display:grid; place-items:center;
+    background:linear-gradient(135deg,var(--a),var(--b));
+    box-shadow:0 10px 40px rgba(99,102,241,.45), inset 0 1px 0 rgba(255,255,255,.35);
+  }
+  .logo svg { width:36px; height:36px; }
+  h1 {
+    font-size:clamp(1.6rem,6vw,2.1rem); line-height:1.15; margin:0 0 8px; font-weight:800; letter-spacing:-.02em;
+    background:linear-gradient(90deg,#fff,#a5f3fc 45%,#c4b5fd); -webkit-background-clip:text; background-clip:text; color:transparent;
+  }
+  .sub { color:var(--mut); margin:0; font-size:.95rem; }
+
+  .card {
+    background:var(--card); border:1px solid var(--line); border-radius:22px; padding:22px;
+    backdrop-filter:blur(18px); -webkit-backdrop-filter:blur(18px);
+    box-shadow:0 20px 60px rgba(0,0,0,.45);
+  }
+  label { display:flex; justify-content:space-between; align-items:center; font-size:.8rem; letter-spacing:.08em;
+    text-transform:uppercase; color:var(--mut); margin-bottom:8px; }
+  .badge { font-size:.72rem; letter-spacing:.04em; text-transform:none; padding:3px 10px; border-radius:99px;
+    background:rgba(52,211,153,.14); color:var(--ok); border:1px solid rgba(52,211,153,.35); display:none; }
+  .badge.show { display:inline-block; }
+
+  .sel { position:relative; }
+  .sel::after { content:""; position:absolute; right:18px; top:50%; width:9px; height:9px; margin-top:-7px;
+    border-right:2px solid var(--mut); border-bottom:2px solid var(--mut); transform:rotate(45deg); pointer-events:none; }
+  select {
+    width:100%; appearance:none; -webkit-appearance:none; font:inherit; font-weight:600; font-size:1.05rem;
+    padding:15px 44px 15px 16px; color:var(--fg); border-radius:14px; cursor:pointer;
+    background:rgba(255,255,255,.06); border:1px solid var(--line); outline:none; transition:.2s;
+  }
+  select:hover:not(:disabled) { border-color:rgba(34,211,238,.5); }
+  select:focus-visible { border-color:var(--a); box-shadow:0 0 0 3px rgba(34,211,238,.2); }
+  select option { background:#10162a; color:var(--fg); }
+  select:disabled { opacity:.55; cursor:default; }
+
+  button {
+    width:100%; margin-top:16px; padding:16px; border:0; border-radius:14px; cursor:pointer;
+    font:inherit; font-weight:700; font-size:1.05rem; letter-spacing:.02em; color:#04101a;
+    background:linear-gradient(135deg,var(--a),var(--b)); background-size:140% 100%;
+    box-shadow:0 10px 30px rgba(34,211,238,.28); transition:transform .15s, box-shadow .2s, filter .2s;
+    display:flex; align-items:center; justify-content:center; gap:10px;
+  }
+  button svg { width:20px; height:20px; }
+  button:hover:not(:disabled) { transform:translateY(-1px); filter:brightness(1.08); box-shadow:0 14px 36px rgba(139,92,246,.38); }
+  button:active:not(:disabled) { transform:translateY(0); }
+  button:disabled { opacity:.45; cursor:not-allowed; box-shadow:none; }
+
+  .steps { display:flex; gap:6px; margin:20px 0 0; padding:0; list-style:none; }
+  .steps li { flex:1; text-align:center; font-size:.7rem; color:var(--mut); }
+  .steps li::before { content:""; display:block; height:4px; border-radius:4px; margin-bottom:7px; background:rgba(255,255,255,.1); transition:.3s; }
+  .steps li.active { color:var(--fg); }
+  .steps li.active::before { background:linear-gradient(90deg,var(--a),var(--b)); animation:pulse 1.2s infinite; }
+  .steps li.done { color:var(--ok); }
+  .steps li.done::before { background:var(--ok); }
+  .steps li.fail { color:var(--err); }
+  .steps li.fail::before { background:var(--err); }
+  @keyframes pulse { 50% { opacity:.45; } }
+
+  .prog { margin-top:16px; display:none; }
+  .prog.show { display:block; }
+  .track { height:10px; border-radius:99px; background:rgba(255,255,255,.08); overflow:hidden; }
+  .fill { height:100%; width:0; border-radius:99px; background:linear-gradient(90deg,var(--a),var(--b)); transition:width .25s; }
+  .pct { text-align:right; font-size:.8rem; color:var(--mut); margin-top:6px; font-variant-numeric:tabular-nums; }
+
+  .term { margin-top:18px; border-radius:14px; overflow:hidden; border:1px solid var(--line); background:#050810; }
+  .term-bar { display:flex; align-items:center; gap:6px; padding:9px 12px; background:rgba(255,255,255,.04); border-bottom:1px solid var(--line); }
+  .term-bar i { width:10px; height:10px; border-radius:50%; background:#ff5f57; }
+  .term-bar i:nth-child(2) { background:#febc2e; }
+  .term-bar i:nth-child(3) { background:#28c840; }
+  .term-bar span { margin-left:8px; font-size:.72rem; color:var(--mut); letter-spacing:.06em; }
+  pre { margin:0; padding:12px 14px; height:170px; overflow:auto; color:#86efac;
+    font:.76rem/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; white-space:pre-wrap; word-break:break-word; }
+
+  #warn { display:none; margin-top:16px; padding:12px 14px; border-radius:12px; font-size:.88rem;
+    background:rgba(251,113,133,.1); border:1px solid rgba(251,113,133,.35); color:#fecdd3; }
+  footer { text-align:center; color:var(--mut); font-size:.78rem; margin-top:22px; }
 </style>
 </head>
 <body>
 <main>
-  <h1>ESP32 прошивальщик</h1>
-  <div class="card">
-    <label for="ver">Версия</label>
-    <select id="ver" disabled><option>Загрузка релизов…</option></select>
-    <button id="flash" disabled>Прошить</button>
-    <progress id="bar" value="0" max="100" hidden></progress>
-    <pre id="log"></pre>
-    <div id="warn">Web Serial не поддерживается. Откройте в Chrome или Edge на компьютере.</div>
-  </div>
+  <header>
+    <div class="logo">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="6" y="6" width="12" height="12" rx="2.5"/><rect x="9.5" y="9.5" width="5" height="5" rx="1" fill="#fff" stroke="none" opacity=".9"/>
+        <path d="M9 2.5v3M15 2.5v3M9 18.5v3M15 18.5v3M2.5 9h3M2.5 15h3M18.5 9h3M18.5 15h3"/>
+      </svg>
+    </div>
+    <h1>Supermini-Reader Web loader</h1>
+    <p class="sub">Прошивка устройства прямо из браузера в один клик</p>
+  </header>
+
+  <section class="card">
+    <label for="ver">Версия прошивки <span class="badge" id="latest">последняя выбрана</span></label>
+    <div class="sel"><select id="ver" disabled><option>Загрузка версий…</option></select></div>
+
+    <button id="flash" disabled>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>
+      Прошить
+    </button>
+
+    <ul class="steps" id="steps">
+      <li>Загрузка</li><li>Подключение</li><li>Прошивка</li><li>Готово</li>
+    </ul>
+
+    <div class="prog" id="prog">
+      <div class="track"><div class="fill" id="fill"></div></div>
+      <div class="pct" id="pct">0%</div>
+    </div>
+
+    <div class="term">
+      <div class="term-bar"><i></i><i></i><i></i><span>ТЕРМИНАЛ</span></div>
+      <pre id="log"></pre>
+    </div>
+    <div id="warn">Web Serial не поддерживается этим браузером. Откройте страницу в Chrome или Edge на компьютере.</div>
+  </section>
+
+  <footer>Подключите устройство по USB, нажмите «Прошить» и выберите порт</footer>
 </main>
 
 <script type="module">
@@ -40,8 +150,8 @@ import { ESPLoader, Transport } from "https://cdn.jsdelivr.net/npm/esptool-js@0.
 // ===== НАСТРОЙКИ =====
 const FOLDER = "firmware";          // папка в репозитории, внутри которой лежат папки версий
 const FILES = [                     // обязательные файлы в каждой папке версии
-  { name: "bootloader.bin", addr: 0x00000 },
-  { name: "partitions.bin", addr: 0x80000 },
+  { name: "bootloader.bin", addr: 0x0 },
+  { name: "partitions.bin", addr: 0x8000 },
   { name: "firmware.bin",   addr: 0x10000 },
 ];
 const BAUD = 460800;
@@ -55,7 +165,22 @@ const REPO = new URLSearchParams(location.search).get("repo") ||
 
 const $ = id => document.getElementById(id);
 const log = s => { $("log").textContent += s + "\n"; $("log").scrollTop = 1e9; };
+const stepEls = [...document.querySelectorAll("#steps li")];
+const setStep = (n, fail = false) => stepEls.forEach((el, i) => {
+  el.className = i < n ? "done" : i === n ? (fail ? "fail" : "active") : "";
+});
 let versions = [];
+
+// Сравнение версий по числам: 1.1.1v > 1.1v > 1.0
+const nums = v => (v.match(/\d+/g) || []).map(Number);
+const newestFirst = (a, b) => {
+  const x = nums(a), y = nums(b);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (y[i] ?? 0) - (x[i] ?? 0);
+    if (d) return d;
+  }
+  return b.localeCompare(a);
+};
 
 if (!("serial" in navigator)) $("warn").style.display = "block";
 
@@ -71,15 +196,19 @@ async function loadVersions() {
       const m = n.path.match(new RegExp(`^${FOLDER}/([^/]+)/([^/]+)$`));
       if (m && n.type === "blob") (byVer[m[1]] ||= new Set()).add(m[2]);
     }
-    versions = Object.keys(byVer)
-      .filter(v => FILES.every(f => byVer[v].has(f.name)))
-      .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
-    $("ver").innerHTML = versions.map((v, i) => `<option value="${i}">${v}</option>`).join("");
+    versions = Object.keys(byVer).filter(v => FILES.every(f => byVer[v].has(f.name))).sort(newestFirst);
+    $("ver").innerHTML = versions.map((v, i) =>
+      `<option value="${i}">${v}${i === 0 ? "  ·  последняя" : ""}</option>`).join("");
+    $("ver").value = "0";                       // автоматически выбираем самую свежую
+    $("latest").classList.toggle("show", versions.length > 0);
     $("ver").disabled = !versions.length;
     $("flash").disabled = !versions.length || !("serial" in navigator);
-    log(versions.length ? `Найдено версий: ${versions.length}` : `В папке ${FOLDER}/ нет версий с нужными файлами`);
-  } catch (e) { log("Ошибка: " + e.message); }
+    log(versions.length ? `Найдено версий: ${versions.length}. Выбрана последняя: ${versions[0]}`
+                        : `В папке ${FOLDER}/ нет версий с нужными файлами`);
+  } catch (e) { log("Ошибка: " + e.message); $("ver").innerHTML = "<option>Не удалось загрузить</option>"; }
 }
+
+$("ver").onchange = () => $("latest").classList.toggle("show", $("ver").value === "0");
 
 async function download(ver, f) {
   const r = await fetch(`${FOLDER}/${encodeURIComponent(ver)}/${f.name}`, { cache: "no-cache" });
@@ -91,14 +220,17 @@ const toBinStr = u8 => { let s = ""; for (let i = 0; i < u8.length; i += 0x8000)
 
 $("flash").onclick = async () => {
   const ver = versions[$("ver").value];
-  $("flash").disabled = true; $("ver").disabled = true; $("bar").hidden = false; $("bar").value = 0;
-  let transport;
+  $("flash").disabled = true; $("ver").disabled = true;
+  $("prog").classList.add("show"); $("fill").style.width = "0%"; $("pct").textContent = "0%";
+  let transport, step = 0;
   try {
+    setStep(0);
     const fileArray = [];
     for (const f of FILES) {
       log(`Скачиваю ${f.name} (${ver})…`);
       fileArray.push({ data: toBinStr(await download(ver, f)), address: f.addr });
     }
+    step = 1; setStep(1);
     log("Выберите порт…");
     const port = await navigator.serial.requestPort();
     transport = new Transport(port, true);
@@ -107,15 +239,22 @@ $("flash").onclick = async () => {
       terminal: { clean() { $("log").textContent = ""; }, writeLine: log, write: s => log(s) }
     });
     log("Подключение: " + await loader.main());
+    step = 2; setStep(2);
     await loader.writeFlash({
       fileArray,
       flashSize: "keep", flashMode: "keep", flashFreq: "keep",
       eraseAll: false, compress: true,
-      reportProgress: (i, w, t) => { $("bar").value = Math.round((i + w / t) / fileArray.length * 100); }
+      reportProgress: (i, w, t) => {
+        const p = Math.round((i + w / t) / fileArray.length * 100);
+        $("fill").style.width = p + "%"; $("pct").textContent = p + "%";
+      }
     });
     await loader.after();
+    $("fill").style.width = "100%"; $("pct").textContent = "100%";
+    setStep(4);
     log("Готово! Устройство перезагружено.");
   } catch (e) {
+    setStep(step, true);
     log("Ошибка: " + e.message);
   } finally {
     try { await transport?.disconnect(); } catch {}
