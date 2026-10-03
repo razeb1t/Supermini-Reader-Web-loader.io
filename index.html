@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ESP32 прошивальщик</title>
+<style>
+  :root { --bg:#fff; --fg:#1a1a1a; --card:#f4f5f7; --acc:#2563eb; --mut:#6b7280; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#111418; --fg:#e8e8e8; --card:#1b2027; --mut:#9aa3af; } }
+  body { margin:0; padding:24px 16px; background:var(--bg); color:var(--fg); font:16px system-ui,sans-serif; }
+  main { max-width:480px; margin:0 auto; }
+  h1 { font-size:1.4rem; margin:0 0 16px; }
+  .card { background:var(--card); border-radius:12px; padding:16px; }
+  label { display:block; font-size:.85rem; color:var(--mut); margin-bottom:6px; }
+  select, button { width:100%; font:inherit; padding:12px; border-radius:8px; border:1px solid #8884; box-sizing:border-box; }
+  select { background:var(--bg); color:var(--fg); }
+  button { background:var(--acc); color:#fff; border:0; margin-top:14px; cursor:pointer; font-weight:600; }
+  button:disabled { opacity:.5; cursor:default; }
+  progress { width:100%; margin-top:14px; height:10px; }
+  pre { background:#000; color:#9f9; padding:10px; border-radius:8px; height:160px; overflow:auto; font-size:.75rem; white-space:pre-wrap; margin:14px 0 0; }
+  #warn { color:#d33; margin-top:12px; display:none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>ESP32 прошивальщик</h1>
+  <div class="card">
+    <label for="ver">Версия</label>
+    <select id="ver" disabled><option>Загрузка релизов…</option></select>
+    <button id="flash" disabled>Прошить</button>
+    <progress id="bar" value="0" max="100" hidden></progress>
+    <pre id="log"></pre>
+    <div id="warn">Web Serial не поддерживается. Откройте в Chrome или Edge на компьютере.</div>
+  </div>
+</main>
+
+<script type="module">
+import { ESPLoader, Transport } from "https://cdn.jsdelivr.net/npm/esptool-js@0.5.4/+esm";
+
+// ===== НАСТРОЙКИ =====
+const FOLDER = "firmware";          // папка в репозитории, внутри которой лежат папки версий
+const FILES = [                     // обязательные файлы в каждой папке версии
+  { name: "bootloader.bin", addr: 0x0 },
+  { name: "partitions.bin", addr: 0x8000 },
+  { name: "firmware.bin",   addr: 0x10000 },
+];
+const BAUD = 460800;
+// =====================
+
+// Репозиторий определяется сам, если страница открыта на github.io.
+// Для локального теста: ?repo=логин/репозиторий
+const host = location.hostname, seg = location.pathname.split("/")[1];
+const REPO = new URLSearchParams(location.search).get("repo") ||
+  (host.endsWith(".github.io") ? `${host.split(".")[0]}/${seg || host}` : "OWNER/REPO");
+
+const $ = id => document.getElementById(id);
+const log = s => { $("log").textContent += s + "\n"; $("log").scrollTop = 1e9; };
+let versions = [];
+
+if (!("serial" in navigator)) $("warn").style.display = "block";
+
+async function loadVersions() {
+  try {
+    const api = `https://api.github.com/repos/${REPO}`;
+    const info = await (await fetch(api)).json();
+    if (!info.default_branch) throw new Error(info.message || "репозиторий не найден");
+    const r = await fetch(`${api}/git/trees/${info.default_branch}?recursive=1`);
+    if (!r.ok) throw new Error("GitHub API: " + r.status);
+    const byVer = {};
+    for (const n of (await r.json()).tree) {
+      const m = n.path.match(new RegExp(`^${FOLDER}/([^/]+)/([^/]+)$`));
+      if (m && n.type === "blob") (byVer[m[1]] ||= new Set()).add(m[2]);
+    }
+    versions = Object.keys(byVer)
+      .filter(v => FILES.every(f => byVer[v].has(f.name)))
+      .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+    $("ver").innerHTML = versions.map((v, i) => `<option value="${i}">${v}</option>`).join("");
+    $("ver").disabled = !versions.length;
+    $("flash").disabled = !versions.length || !("serial" in navigator);
+    log(versions.length ? `Найдено версий: ${versions.length}` : `В папке ${FOLDER}/ нет версий с нужными файлами`);
+  } catch (e) { log("Ошибка: " + e.message); }
+}
+
+async function download(ver, f) {
+  const r = await fetch(`${FOLDER}/${encodeURIComponent(ver)}/${f.name}`, { cache: "no-cache" });
+  if (!r.ok) throw new Error(`Не удалось скачать ${f.name} (${r.status})`);
+  return new Uint8Array(await r.arrayBuffer());
+}
+
+const toBinStr = u8 => { let s = ""; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return s; };
+
+$("flash").onclick = async () => {
+  const ver = versions[$("ver").value];
+  $("flash").disabled = true; $("ver").disabled = true; $("bar").hidden = false; $("bar").value = 0;
+  let transport;
+  try {
+    const fileArray = [];
+    for (const f of FILES) {
+      log(`Скачиваю ${f.name} (${ver})…`);
+      fileArray.push({ data: toBinStr(await download(ver, f)), address: f.addr });
+    }
+    log("Выберите порт…");
+    const port = await navigator.serial.requestPort();
+    transport = new Transport(port, true);
+    const loader = new ESPLoader({
+      transport, baudrate: BAUD,
+      terminal: { clean() { $("log").textContent = ""; }, writeLine: log, write: s => log(s) }
+    });
+    log("Подключение: " + await loader.main());
+    await loader.writeFlash({
+      fileArray,
+      flashSize: "keep", flashMode: "keep", flashFreq: "keep",
+      eraseAll: false, compress: true,
+      reportProgress: (i, w, t) => { $("bar").value = Math.round((i + w / t) / fileArray.length * 100); }
+    });
+    await loader.after();
+    log("Готово! Устройство перезагружено.");
+  } catch (e) {
+    log("Ошибка: " + e.message);
+  } finally {
+    try { await transport?.disconnect(); } catch {}
+    $("flash").disabled = false; $("ver").disabled = false;
+  }
+};
+
+loadVersions();
+</script>
+</body>
+</html>
