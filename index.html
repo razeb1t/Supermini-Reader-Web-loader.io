@@ -203,7 +203,7 @@ async function loadVersions() {
     $("latest").classList.toggle("show", versions.length > 0);
     $("ver").disabled = !versions.length;
     $("flash").disabled = !versions.length || !("serial" in navigator);
-    log(versions.length ? `Найдено версий: ${versions.length}. Выбрана последняя: ${versions[0]}`
+    log(versions.length ? `Найдено версий: ${versions.length}. Выбрана последняя: ${versions[0]}, перед прошивкой зажмите BOOT, не отпуская BOOT нажмите RESET, отпустите BOOT - так вы перевёте устройтсво в режим прошивки`
                         : `В папке ${FOLDER}/ нет версий с нужными файлами`);
   } catch (e) { log("Ошибка: " + e.message); $("ver").innerHTML = "<option>Не удалось загрузить</option>"; }
 }
