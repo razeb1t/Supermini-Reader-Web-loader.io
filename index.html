@@ -159,6 +159,9 @@ const FILES = [                     // обязательные файлы в к
   { name: "firmware.bin",   addr: 0x10000 },
 ];
 const BAUD = 460800;
+// МК, которые всегда идут первыми (в этом порядке). Регистр, пробелы, "-" и "_" не важны:
+// "ESP32-S3 Supermini", "Esp32 s3 supermini" и "esp32_s3_supermini" — одно и то же.
+const PRIORITY = ["ESP32-S3 Supermini"];
 // =====================
 
 // Репозиторий определяется сам, если страница открыта на github.io.
@@ -197,6 +200,8 @@ const chipGuess = name => {
 // Адрес загрузчика по умолчанию, если .txt нет
 const defaultBootAddr = chip => chip === "ESP32" ? 0x1000 : 0x0;
 
+const norm = s => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+const rank = n => { const i = PRIORITY.findIndex(p => norm(p) === norm(n)); return i < 0 ? PRIORITY.length : i; };
 const encPath = (...p) => p.map(encodeURIComponent).join("/");
 const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
@@ -223,12 +228,13 @@ async function loadTree() {
       const ok = Object.keys(m.vers).filter(v => FILES.every(f => m.vers[v].has(f.name)));
       if (ok.length) mcus[name] = { addrFile: m.addrFile, vers: Object.fromEntries(ok.map(v => [v, m.vers[v]])) };
     }
-    const names = Object.keys(mcus).sort((a, b) => a.localeCompare(b));
+    const names = Object.keys(mcus).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
     if (!names.length) {
       $("mcu").innerHTML = "<option>Нет прошивок</option>";
       return log(`В папке ${FOLDER}/ нет МК с нужными файлами`);
     }
     $("mcu").innerHTML = names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
+    $("mcu").selectedIndex = 0;                 // первый в списке выбран по умолчанию
     $("mcu").disabled = false;
     log(`Найдено МК: ${names.length}. Перед прошивкой зажмите BOOT, не отпуская BOOT нажмите RESET, отпустите BOOT - так вы переведёте устройство в режим прошивки`);
     onMcuChange();
