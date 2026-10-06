@@ -117,8 +117,11 @@
   </header>
 
   <section class="card">
-    <label for="ver">Версия прошивки <span class="badge" id="latest">последняя</span></label>
-    <div class="sel"><select id="ver" disabled><option>Загрузка версий…</option></select></div>
+    <label for="mcu">Микроконтроллер</label>
+    <div class="sel"><select id="mcu" disabled><option>Загрузка…</option></select></div>
+
+    <label for="ver" style="margin-top:16px">Версия прошивки <span class="badge" id="latest">последняя</span></label>
+    <div class="sel"><select id="ver" disabled><option>Сначала выберите МК</option></select></div>
 
     <button id="flash" disabled>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>
@@ -148,9 +151,10 @@
 import { ESPLoader, Transport } from "https://cdn.jsdelivr.net/npm/esptool-js@0.5.4/+esm";
 
 // ===== НАСТРОЙКИ =====
-const FOLDER = "firmware";          // папка в репозитории, внутри которой лежат папки версий
+const FOLDER = "firmware";          // структура: firmware/<МК>/<версия>/{bootloader,partitions,firmware}.bin
+const ADDR_FILE = "bootloader_address.txt";   // адрес загрузчика: в папке версии или (общий) в папке МК
 const FILES = [                     // обязательные файлы в каждой папке версии
-  { name: "bootloader.bin", addr: 0x0 },
+  { name: "bootloader.bin", addr: null },     // адрес берётся из bootloader_address.txt
   { name: "partitions.bin", addr: 0x8000 },
   { name: "firmware.bin",   addr: 0x10000 },
 ];
@@ -169,9 +173,12 @@ const stepEls = [...document.querySelectorAll("#steps li")];
 const setStep = (n, fail = false) => stepEls.forEach((el, i) => {
   el.className = i < n ? "done" : i === n ? (fail ? "fail" : "active") : "";
 });
-let versions = [];
 
-// Сравнение версий по числам: 1.1.1v > 1.1v > 1.0
+// mcus[имя МК] = { addrFile: bool, vers: { версия: Set(имена файлов) } }
+let mcus = {};
+let versions = [];                  // версии выбранного МК, от новой к старой
+
+// Сравнение версий по числам: 1.1.1 > 1.1 > 1.0
 const nums = v => (v.match(/\d+/g) || []).map(Number);
 const newestFirst = (a, b) => {
   const x = nums(a), y = nums(b);
@@ -182,53 +189,106 @@ const newestFirst = (a, b) => {
   return b.localeCompare(a);
 };
 
+// Папка МК -> имя чипа esptool-js (для защиты от прошивки не в ту плату)
+const chipGuess = name => {
+  const m = name.match(/esp[\s_-]?32(?:[\s_-]?(s2|s3|c2|c3|c5|c6|h2|p4))?/i);
+  return m ? "ESP32" + (m[1] ? "-" + m[1].toUpperCase() : "") : null;
+};
+// Адрес загрузчика по умолчанию, если .txt нет
+const defaultBootAddr = chip => chip === "ESP32" ? 0x1000 : 0x0;
+
+const encPath = (...p) => p.map(encodeURIComponent).join("/");
+const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
 if (!("serial" in navigator)) $("warn").style.display = "block";
 
-async function loadVersions() {
+async function loadTree() {
   try {
     const api = `https://api.github.com/repos/${REPO}`;
     const info = await (await fetch(api)).json();
     if (!info.default_branch) throw new Error(info.message || "репозиторий не найден");
     const r = await fetch(`${api}/git/trees/${info.default_branch}?recursive=1`);
     if (!r.ok) throw new Error("GitHub API: " + r.status);
-    const byVer = {};
+    const all = {};
     for (const n of (await r.json()).tree) {
-      const m = n.path.match(new RegExp(`^${FOLDER}/([^/]+)/([^/]+)$`));
-      if (m && n.type === "blob") (byVer[m[1]] ||= new Set()).add(m[2]);
+      if (n.type !== "blob" || !n.path.startsWith(FOLDER + "/")) continue;
+      const parts = n.path.slice(FOLDER.length + 1).split("/");
+      const mcu = (all[parts[0]] ||= { addrFile: false, vers: {} });
+      if (parts.length === 2 && parts[1] === ADDR_FILE) mcu.addrFile = true;
+      if (parts.length === 3) (mcu.vers[parts[1]] ||= new Set()).add(parts[2]);
     }
-    versions = Object.keys(byVer).filter(v => FILES.every(f => byVer[v].has(f.name))).sort(newestFirst);
-    $("ver").innerHTML = versions.map((v, i) =>
-      `<option value="${i}">${v}${i === 0 ? "  ·  последняя" : ""}</option>`).join("");
-    $("ver").value = "0";                       // автоматически выбираем самую свежую
-    $("latest").classList.toggle("show", versions.length > 0);
-    $("ver").disabled = !versions.length;
-    $("flash").disabled = !versions.length || !("serial" in navigator);
-    log(versions.length ? `Найдено версий: ${versions.length}. Выбрана последняя: ${versions[0]}, перед прошивкой зажмите BOOT, не отпуская BOOT нажмите RESET, отпустите BOOT - так вы перевёте устройтсво в режим прошивки`
-                        : `В папке ${FOLDER}/ нет версий с нужными файлами`);
-  } catch (e) { log("Ошибка: " + e.message); $("ver").innerHTML = "<option>Не удалось загрузить</option>"; }
+    // оставляем только МК, у которых есть хотя бы одна полная версия
+    mcus = {};
+    for (const [name, m] of Object.entries(all)) {
+      const ok = Object.keys(m.vers).filter(v => FILES.every(f => m.vers[v].has(f.name)));
+      if (ok.length) mcus[name] = { addrFile: m.addrFile, vers: Object.fromEntries(ok.map(v => [v, m.vers[v]])) };
+    }
+    const names = Object.keys(mcus).sort((a, b) => a.localeCompare(b));
+    if (!names.length) {
+      $("mcu").innerHTML = "<option>Нет прошивок</option>";
+      return log(`В папке ${FOLDER}/ нет МК с нужными файлами`);
+    }
+    $("mcu").innerHTML = names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
+    $("mcu").disabled = false;
+    log(`Найдено МК: ${names.length}. Перед прошивкой зажмите BOOT, не отпуская BOOT нажмите RESET, отпустите BOOT - так вы переведёте устройство в режим прошивки`);
+    onMcuChange();
+  } catch (e) { log("Ошибка: " + e.message); $("mcu").innerHTML = "<option>Не удалось загрузить</option>"; }
 }
 
+function onMcuChange() {
+  const mcu = $("mcu").value;
+  versions = Object.keys(mcus[mcu].vers).sort(newestFirst);
+  $("ver").innerHTML = versions.map((v, i) =>
+    `<option value="${i}">${esc(v)}${i === 0 ? "  ·  последняя" : ""}</option>`).join("");
+  $("ver").value = "0";                         // автоматически выбираем самую свежую
+  $("ver").disabled = false;
+  $("latest").classList.add("show");
+  $("flash").disabled = !("serial" in navigator);
+  log(`${mcu}: версий ${versions.length}, выбрана последняя — ${versions[0]}`);
+}
+
+$("mcu").onchange = onMcuChange;
 $("ver").onchange = () => $("latest").classList.toggle("show", $("ver").value === "0");
 
-async function download(ver, f) {
-  const r = await fetch(`${FOLDER}/${encodeURIComponent(ver)}/${f.name}`, { cache: "no-cache" });
-  if (!r.ok) throw new Error(`Не удалось скачать ${f.name} (${r.status})`);
+async function download(mcu, ver, name) {
+  const r = await fetch(`${encPath(FOLDER, mcu, ver, name)}`, { cache: "no-cache" });
+  if (!r.ok) throw new Error(`Не удалось скачать ${name} (${r.status})`);
   return new Uint8Array(await r.arrayBuffer());
+}
+
+// Адрес загрузчика: сначала bootloader_address.txt в папке версии, потом в папке МК, иначе по умолчанию
+async function bootAddress(mcu, ver) {
+  const m = mcus[mcu];
+  const url = m.vers[ver].has(ADDR_FILE) ? encPath(FOLDER, mcu, ver, ADDR_FILE)
+            : m.addrFile ? encPath(FOLDER, mcu, ADDR_FILE) : null;
+  if (url) {
+    const r = await fetch(url, { cache: "no-cache" });
+    if (!r.ok) throw new Error(`Не удалось прочитать ${ADDR_FILE} (${r.status})`);
+    const t = (await r.text()).trim();
+    const hit = t.match(/^(?:0x)?([0-9a-f]+)\b/i);   // "0x1000" или "1000" — всегда hex
+    if (!hit) throw new Error(`В ${ADDR_FILE} нет адреса: «${t.slice(0, 30)}»`);
+    return parseInt(hit[1], 16);
+  }
+  const d = defaultBootAddr(chipGuess(mcu));
+  log(`${ADDR_FILE} не найден, использую адрес по умолчанию 0x${d.toString(16)}`);
+  return d;
 }
 
 const toBinStr = u8 => { let s = ""; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return s; };
 
 $("flash").onclick = async () => {
-  const ver = versions[$("ver").value];
-  $("flash").disabled = true; $("ver").disabled = true;
+  const mcu = $("mcu").value, ver = versions[$("ver").value];
+  $("flash").disabled = true; $("ver").disabled = true; $("mcu").disabled = true;
   $("prog").classList.add("show"); $("fill").style.width = "0%"; $("pct").textContent = "0%";
   let transport, step = 0;
   try {
     setStep(0);
+    const bootAddr = await bootAddress(mcu, ver);
+    log(`${mcu} · ${ver} · загрузчик по адресу 0x${bootAddr.toString(16)}`);
     const fileArray = [];
     for (const f of FILES) {
-      log(`Скачиваю ${f.name} (${ver})…`);
-      fileArray.push({ data: toBinStr(await download(ver, f)), address: f.addr });
+      log(`Скачиваю ${f.name}…`);
+      fileArray.push({ data: toBinStr(await download(mcu, ver, f.name)), address: f.addr ?? bootAddr });
     }
     step = 1; setStep(1);
     log("Выберите порт…");
@@ -239,6 +299,9 @@ $("flash").onclick = async () => {
       terminal: { clean() { $("log").textContent = ""; }, writeLine: log, write: s => log(s) }
     });
     log("Подключение: " + await loader.main());
+    const want = chipGuess(mcu), got = loader.chip?.CHIP_NAME;
+    if (want && got && !got.toUpperCase().startsWith(want))
+      throw new Error(`Подключена плата ${got}, а выбран ${mcu}. Прошивка отменена`);
     step = 2; setStep(2);
     await loader.writeFlash({
       fileArray,
@@ -258,11 +321,11 @@ $("flash").onclick = async () => {
     log("Ошибка: " + e.message);
   } finally {
     try { await transport?.disconnect(); } catch {}
-    $("flash").disabled = false; $("ver").disabled = false;
+    $("flash").disabled = false; $("ver").disabled = false; $("mcu").disabled = false;
   }
 };
 
-loadVersions();
+loadTree();
 </script>
 </body>
 </html>
