@@ -152,9 +152,9 @@ import { ESPLoader, Transport } from "https://cdn.jsdelivr.net/npm/esptool-js@0.
 
 // ===== НАСТРОЙКИ =====
 const FOLDER = "firmware";          // структура: firmware/<МК>/<версия>/{bootloader,partitions,firmware}.bin
-const ADDR_FILE = "bootloader_address.txt";   // адрес загрузчика: в папке версии или (общий) в папке МК
+const ADDR_FILE = "bootloader.txt";   // адрес загрузчика: в папке версии или (общий) в папке МК
 const FILES = [                     // обязательные файлы в каждой папке версии
-  { name: "bootloader.bin", addr: null },     // адрес берётся из bootloader_address.txt
+  { name: "bootloader.bin", addr: null },     // адрес берётся из bootloader.txt
   { name: "partitions.bin", addr: 0x8000 },
   { name: "firmware.bin",   addr: 0x10000 },
 ];
@@ -209,13 +209,19 @@ if (!("serial" in navigator)) $("warn").style.display = "block";
 
 async function loadTree() {
   try {
-    const api = `https://api.github.com/repos/${REPO}`;
-    const info = await (await fetch(api)).json();
-    if (!info.default_branch) throw new Error(info.message || "репозиторий не найден");
-    const r = await fetch(`${api}/git/trees/${info.default_branch}?recursive=1`);
-    if (!r.ok) throw new Error("GitHub API: " + r.status);
+    // один запрос вместо двух (лимит GitHub API без токена — 60 запросов/час), без кэша, с повторами
+    let tree, err;
+    for (let i = 0; i < 3 && !tree; i++) {
+      try {
+        const r = await fetch(`https://api.github.com/repos/${REPO}/git/trees/HEAD?recursive=1`, { cache: "no-store" });
+        const j = await r.json();
+        if (!r.ok || !j.tree) throw new Error(j.message || "GitHub API: " + r.status);
+        tree = j.tree;
+      } catch (e) { err = e; await new Promise(res => setTimeout(res, 600 * (i + 1))); }
+    }
+    if (!tree) throw err;
     const all = {};
-    for (const n of (await r.json()).tree) {
+    for (const n of tree) {
       if (n.type !== "blob" || !n.path.startsWith(FOLDER + "/")) continue;
       const parts = n.path.slice(FOLDER.length + 1).split("/");
       const mcu = (all[parts[0]] ||= { addrFile: false, vers: {} });
@@ -262,7 +268,7 @@ async function download(mcu, ver, name) {
   return new Uint8Array(await r.arrayBuffer());
 }
 
-// Адрес загрузчика: сначала bootloader_address.txt в папке версии, потом в папке МК, иначе по умолчанию
+// Адрес загрузчика: сначала bootloader.txt в папке версии, потом в папке МК, иначе по умолчанию
 async function bootAddress(mcu, ver) {
   const m = mcus[mcu];
   const url = m.vers[ver].has(ADDR_FILE) ? encPath(FOLDER, mcu, ver, ADDR_FILE)
